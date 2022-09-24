@@ -126,10 +126,23 @@ def rectangles_val_wrapper(a_sc, b_sc):
         return (a//a_sc + b//b_sc +1) % 2
     return rectangles_val
 
+def radial_circles_val_wrapper(rad, cr, num):
+    def radial_circles_val(a, b, rad=rad, cr=cr, num=num):
+        allvalid=np.zeros_like(a)
+        for i in range(num):
+            angle=i/num*2*np.pi
+            x = rad*np.cos(angle)
+            y = rad*np.sin(angle)
+            dist= np.sqrt(np.square(a-x)+np.square(b-y))
+            valid = dist<cr
+            allvalid = np.logical_or(valid, allvalid)
+        return allvalid
+    return radial_circles_val
+
 def concentric_circles_val_wrapper(n_circ):
     def concentric_circles_val(a, b, n_circ=n_circ):
         r = np.sqrt(np.square(a) + np.square(b))
-        return (np.floor(r*2*n_circ)%2 ==0) and r<((n_circ-0.5)/n_circ)
+        return np.logical_and((np.floor(r*2*n_circ)%2 ==0), r<((n_circ-0.5)/n_circ))
     return concentric_circles_val
 
 def circle_obj_wrapper(rad):
@@ -153,6 +166,11 @@ def rectangles_obj_wrapper(a_sc, b_sc):
         res = (np.sin(a/a_sc*2*np.pi))*(np.sin(b/b_sc*2*np.pi))+1
         return res
     return rectangles_obj
+
+def uniform_obj_wrapper():
+    def uniform_obj(a, b):
+        return np.ones(np.shape(a))
+    return uniform_obj
 
 
 def sample_uniform_wrapper(psamples, nsamples):
