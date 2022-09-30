@@ -37,9 +37,23 @@ def L2_vectorized(X, Y):
     Y_sq = tf.reduce_sum(tf.square(Y), axis=1)
     sq = tf.add(tf.expand_dims(X_sq, axis=-1), tf.transpose(Y_sq)) - 2*tf.matmul(X,tf.transpose(Y))
 #     print(tf.expand_dims(X_sq, axis=-1), tf.transpose(Y_sq)) - 2*tf.matmul(X,tf.transpose(Y))
-    sq = tf.clip_by_value(sq, 0, 1e12, name=None)
+    sq = tf.clip_by_value(sq, 0.0, 1e12, name=None)
     return tf.math.sqrt(sq)
 
+def target_threshold_distance_wrapper(ref, p_):
+    def target_threshold_distance(x_eval, y_eval, x_data, y_data, n_data, scorebars, ref=ref, p_=p_):
+        diff = tf.subtract(y_eval,ref)
+        diff_sc = tf.multiply(diff, p_)
+        diff_clip = tf.clip_by_value(diff_sc, -1e12, 0, name=None)
+        zeros = tf.expand_dims(tf.zeros(tf.shape(diff)[1]), axis=0)
+        dists_clip = L2_vectorized(diff_clip, zeros)
+        dists = tf.reduce_min(diff_sc, axis=1, keepdims=True)
+        dists_mask = tf.reduce_all(tf.math.greater(diff, 0), axis=1)
+        dists_mask = tf.expand_dims(tf.cast(dists_mask, "float32"), axis=1)
+        final_scores = tf.multiply(dists_mask, dists)-dists_clip
+        return final_scores, tf.reduce_mean(final_scores)
+    return target_threshold_distance
+        
 def gen_gen_distance_wrapper(flag, reduction="min"):
     def gen_gen_distance(x_eval, y_eval, x_data, y_data, n_data, scorebars, flag=flag):
         if scorebars:
@@ -55,11 +69,11 @@ def gen_gen_distance_wrapper(flag, reduction="min"):
         else:
             raise Exception("Unknown flag passed")
         res = L2_vectorized(x, x)
-        
+        res = tf.linalg.set_diag(res, tf.reduce_max(res, axis=1))
         if reduction == "min":
             scores = tf.reduce_min(res, axis=1)
         elif reduction == "ave":
-            scores = tf.reduce_min(res, axis=1)
+            scores = tf.reduce_mean(res, axis=1)
         else:
             raise Exception("Unknown reduction method")
         return scores, tf.reduce_mean(scores)
@@ -114,7 +128,7 @@ def gen_data_distance_wrapper(flag, reduction="min"):
         if reduction == "min":
             scores = tf.reduce_min(res, axis=1)
         elif reduction == "ave":
-            scores = tf.reduce_min(res, axis=1)
+            scores = tf.reduce_mean(res, axis=1)
         else:
             raise Exception("Unknown reduction method")
         return scores, tf.reduce_mean(scores)
@@ -144,7 +158,7 @@ def data_gen_distance_wrapper(flag, reduction="min"):
         if reduction == "min":
             scores = tf.reduce_min(res, axis=1)
         elif reduction == "ave":
-            scores = tf.reduce_min(res, axis=1)
+            scores = tf.reduce_mean(res, axis=1)
         else:
             raise Exception("Unknown reduction method")
         return None, tf.reduce_mean(scores)
@@ -209,7 +223,7 @@ def gen_neg_distance_wrapper(reduction = "min"):
         if reduction == "min":
             scores = tf.reduce_min(res, axis=1)
         elif reduction == "ave":
-            scores = tf.reduce_min(res, axis=1)
+            scores = tf.reduce_mean(res, axis=1)
         else:
             raise Exception("Unknown reduction method")
         return scores, tf.reduce_mean(scores)
@@ -319,8 +333,8 @@ def recall_wrapper(flag, num_clusters=20, num_angles=1001, num_runs=10, enforce_
             data = pd.concat([x_data, y_data], axis=0)
         else:
             raise Exception("Unknown flag passed")
-        recall, precision = eval_prd.compute_prd_from_embedding(x, data, num_clusters=20, num_angles=num_angles, num_runs=num_runs, enforce_balance=enforce_balance)
-        return None, recall[num_angles//2+1]
+        recall, precision = eval_prd.compute_prd_from_embedding(x, data, num_clusters=num_clusters, num_angles=num_angles, num_runs=num_runs, enforce_balance=enforce_balance)
+        return None, max(recall)
     return calc_prd
 
 def precision_wrapper(flag, num_clusters=20, num_angles=1001, num_runs=10, enforce_balance=False):
@@ -338,14 +352,14 @@ def precision_wrapper(flag, num_clusters=20, num_angles=1001, num_runs=10, enfor
             data = pd.concat([x_data, y_data], axis=0)
         else:
             raise Exception("Unknown flag passed")
-        recall, precision = eval_prd.compute_prd_from_embedding(x, data, num_clusters=20, num_angles=num_angles, num_runs=num_runs, enforce_balance=enforce_balance)
-        return None, precision[num_angles//2+1]
+        recall, precision = eval_prd.compute_prd_from_embedding(x, data, num_clusters=num_clusters, num_angles=num_angles, num_runs=num_runs, enforce_balance=enforce_balance)
+        return None, max(precision)
     return calc_prd
 
-def F1_wrapper(flag, num_clusters=20, num_angles=1001, num_runs=10, enforce_balance=False):
+def F_wrapper(flag, beta=1, num_clusters=20, num_angles=1001, num_runs=10, enforce_balance=False):
     def calc_prd(x_eval, y_eval, x_data, y_data, n_data, scorebars):
         if scorebars:
-            print("Calculating F1")
+            print("Calculating F" + str(beta))
         if flag == "x":
             x = x_eval
             data = x_data
@@ -357,13 +371,13 @@ def F1_wrapper(flag, num_clusters=20, num_angles=1001, num_runs=10, enforce_bala
             data = pd.concat([x_data, y_data], axis=0)
         else:
             raise Exception("Unknown flag passed")
-        recall, precision = eval_prd.compute_prd_from_embedding(x, data, num_clusters=20, num_angles=num_angles, num_runs=num_runs, enforce_balance=enforce_balance)
-        F1 = eval_prd._prd_to_f_beta(precision, recall, beta=1, epsilon=1e-10)
+        recall, precision = eval_prd.compute_prd_from_embedding(x, data, num_clusters=num_clusters, num_angles=num_angles, num_runs=num_runs, enforce_balance=enforce_balance)
+        F = eval_prd._prd_to_f_beta(precision, recall, beta=beta, epsilon=1e-10)
         prd_data = [np.array([precision,recall])]
-        return None, F1[num_angles//2+1]
+        return None, max(F)
     return calc_prd
 
-def AUC_wrapper(flag, num_clusters=20, num_angles=1001, num_runs=10, enforce_balance=False):
+def AUC_wrapper(flag, num_clusters=20, num_angles=1001, num_runs=10, enforce_balance=False, plot=False):
     def calc_prd(x_eval, y_eval, x_data, y_data, n_data, scorebars):
         if scorebars:
             print("Calculating AUC")
@@ -378,13 +392,14 @@ def AUC_wrapper(flag, num_clusters=20, num_angles=1001, num_runs=10, enforce_bal
             data = pd.concat([x_data, y_data], axis=0)
         else:
             raise Exception("Unknown flag passed")
-        recall, precision = eval_prd.compute_prd_from_embedding(x, data, num_clusters=20, num_angles=num_angles, num_runs=num_runs, enforce_balance=enforce_balance)
+        recall, precision = eval_prd.compute_prd_from_embedding(x, data, num_clusters=num_clusters, num_angles=num_angles, num_runs=num_runs, enforce_balance=enforce_balance)
         F1 = eval_prd._prd_to_f_beta(precision, recall, beta=1, epsilon=1e-10)
         prd_data = [np.array([precision,recall])]
-        eval_prd.plot(prd_data, labels=None, out_path=None,legend_loc='lower left', dpi=300)
+        if plot:
+            eval_prd.plot(prd_data, labels=None, out_path=None,legend_loc='lower left', dpi=300)
         tot = 0
-        for i in range(num_angles):
-            tot+=(recall[i]**2+precision[i]**2)/num_angles*np.pi/4
+        for i in range(len(precision)-1):
+            tot+=(precision[i]+precision[i+1])/2*(recall[i+1]-recall[i])
         return None, tot
     return calc_prd
 
